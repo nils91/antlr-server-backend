@@ -92,7 +92,7 @@ public class AntlrHandler {
 			String startRuleName = ctx.pathParam("startRule");
 			Method startRule = parserClass.getMethod(startRuleName);
 			ParseTree tree = (ParseTree) startRule.invoke(parser);
-			
+
 			cacheFolder.toFile().mkdir();
 
 			Files.write(cacheFolder.resolve("errors.txt"), errorListener.getErrors());
@@ -100,7 +100,7 @@ public class AntlrHandler {
 			Files.write(cacheFolder.resolve("ast.svg"), generateTreeImage(parser, tree));
 			Files.write(cacheFolder.resolve("input.txt"), payload);
 		}
-		ctx.result(cacheFolder.toFile().exists()+"");
+		ctx.result(cacheFolder.toFile().exists() + "");
 	}
 
 	private byte[] generateTreeImage(org.antlr.v4.runtime.Parser parser, ParseTree tree) throws IOException {
@@ -136,9 +136,11 @@ public class AntlrHandler {
 	public void listGrammars(@NotNull Context ctx) {
 		String nameList = "";
 		File[] files = storage.toFile().listFiles();
-		for (File file : files) {
-			if (file.isDirectory()) {
-				nameList += file.getName() + "\n";
+		if (files != null) {
+			for (File file : files) {
+				if (file.isDirectory()) {
+					nameList += file.getName() + "\n";
+				}
 			}
 		}
 		ctx.result(nameList);
