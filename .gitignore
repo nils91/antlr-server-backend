@@ -1,5 +1,27 @@
-# Compiled class file
+#binary output folder
+/bin/
+
+#windows binaries
+*.exe
+
+#eclipse
+.project
+.classpath
+/.settings/
+
+#intellij
+/.idea
+/gen
+
+#java compiled
 *.class
+
+#maven
+/dependency-reduced-pom.xml
+/target/
+
+#other
+*.bak
 
 # Log file
 *.log

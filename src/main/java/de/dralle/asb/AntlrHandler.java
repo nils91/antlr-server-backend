@@ -1,0 +1,274 @@
+package de.dralle.asb;
+
+import java.io.ByteArrayOutputStream;
+import java.io.File;
+import java.io.IOException;
+import java.lang.reflect.Method;
+import java.net.URL;
+import java.net.URLClassLoader;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.ArrayList;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+import javax.tools.JavaCompiler;
+import javax.tools.ToolProvider;
+
+import org.antlr.v4.runtime.CharStream;
+import org.antlr.v4.runtime.CharStreams;
+import org.antlr.v4.runtime.CommonTokenStream;
+import org.antlr.v4.runtime.Lexer;
+import org.antlr.v4.runtime.Parser;
+import org.antlr.v4.runtime.TokenStream;
+import org.antlr.v4.runtime.tree.ParseTree;
+import org.antlr.v4.runtime.tree.Trees;
+import org.jetbrains.annotations.NotNull;
+
+import guru.nidi.graphviz.engine.Format;
+import guru.nidi.graphviz.engine.Graphviz;
+import io.javalin.http.Context;
+
+public class AntlrHandler {
+
+	private Path storage = Paths.get("storage");
+
+	public AntlrHandler() {
+
+	}
+
+	public AntlrHandler(Path p) {
+		storage = p;
+	}
+
+	public void uploadGrammar(Context ctx) throws Exception {
+		byte[] payload = ctx.bodyAsBytes();
+		String text = new String(payload);
+		String[] lines = text.split("\n");
+		String grammarName = UUID.randomUUID().toString();
+		for (String string : lines) {
+			Pattern p = Pattern.compile("grammar\\s+(.+?)\\s*?(;|$)");
+			Matcher m = p.matcher(string);
+			if (m.find()) {
+				grammarName = m.group(1);
+			}
+		}
+
+		Path dir = storage.resolve(grammarName);
+		Files.createDirectories(dir);
+		Files.write(dir.resolve(grammarName + ".g4"), payload);
+		System.out.println("Grammar " + grammarName + " saved");
+
+		ctx.result(grammarName);
+	}
+
+	public void parse(Context ctx) throws Exception {
+		String name = ctx.pathParam("name");
+		byte[] payload = ctx.bodyAsBytes();
+		Path dir = storage.resolve(name);
+		Path cacheFolder = Paths.get(dir.toString(), "cache");
+		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
+				getClass().getClassLoader())) {
+			Class<?> lexerClass = loader.loadClass(name + "Lexer");
+			Class<?> parserClass = loader.loadClass(name + "Parser");
+			SyntaxErrorListener errorListener = new SyntaxErrorListener();
+
+			Lexer lexer = (Lexer) lexerClass.getConstructor(CharStream.class)
+					.newInstance(CharStreams.fromString(new String(payload)));
+			lexer.removeErrorListeners();
+			lexer.addErrorListener(errorListener);
+
+			CommonTokenStream tokens = new CommonTokenStream(lexer);
+			Parser parser = (Parser) parserClass.getConstructor(TokenStream.class).newInstance(tokens);
+			parser.removeErrorListeners();
+			parser.addErrorListener(errorListener);
+
+			String startRuleName = ctx.pathParam("startRule");
+			Method startRule = parserClass.getMethod(startRuleName);
+			ParseTree tree = (ParseTree) startRule.invoke(parser);
+			
+			cacheFolder.toFile().mkdir();
+
+			Files.write(cacheFolder.resolve("errors.txt"), errorListener.getErrors());
+			Files.writeString(cacheFolder.resolve("ast.txt"), tree.toStringTree());
+			Files.write(cacheFolder.resolve("ast.svg"), generateTreeImage(parser, tree));
+			Files.write(cacheFolder.resolve("input.txt"), payload);
+		}
+		ctx.result(cacheFolder.toFile().exists()+"");
+	}
+
+	private byte[] generateTreeImage(org.antlr.v4.runtime.Parser parser, ParseTree tree) throws IOException {
+		StringBuilder dot = new StringBuilder();
+		dot.append("digraph G {\n");
+		dot.append("  node [shape=none, fontname=\"Arial\"];\n");
+		buildDot(tree, parser, dot, 0);
+		dot.append("}");
+
+		ByteArrayOutputStream baos = new ByteArrayOutputStream();
+		Graphviz.fromString(dot.toString()).width(1000) // Optional: scale width
+				.render(Format.SVG).toOutputStream(baos);
+
+		return baos.toByteArray();
+	}
+
+	private int buildDot(ParseTree tree, org.antlr.v4.runtime.Parser parser, StringBuilder dot, int count) {
+		int currentId = count;
+		String label = Trees.getNodeText(tree, parser);
+		// Escape quotes for DOT format
+		label = label.replace("\"", "\\\"");
+
+		dot.append(String.format("  n%d [label=\"%s\"];\n", currentId, label));
+
+		for (int i = 0; i < tree.getChildCount(); i++) {
+			int childId = count + 1;
+			dot.append(String.format("  n%d -> n%d;\n", currentId, childId));
+			count = buildDot(tree.getChild(i), parser, dot, childId);
+		}
+		return count;
+	}
+
+	public void listGrammars(@NotNull Context ctx) {
+		String nameList = "";
+		File[] files = storage.toFile().listFiles();
+		for (File file : files) {
+			if (file.isDirectory()) {
+				nameList += file.getName() + "\n";
+			}
+		}
+		ctx.result(nameList);
+	}
+
+	public void deleteGrammar(@NotNull Context ctx) {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		ctx.result(deleteRecursive(grammarFolderPath) + "");
+	}
+
+	private int deleteRecursive(Path grammarFolderPath) {
+		int cnt = 0;
+		File[] sub = grammarFolderPath.toFile().listFiles();
+		if (sub != null) {
+			for (File file : sub) {
+				cnt += deleteRecursive(file.toPath());
+			}
+		}
+		if (grammarFolderPath.toFile().delete()) {
+			cnt++;
+		}
+		return cnt;
+	}
+
+	public void checkGrammarExists(@NotNull Context ctx) {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		Path grammarFile = Paths.get(grammarFolderPath.toString(), name + ".g4");
+		ctx.result(grammarFile.toFile().exists() + "");
+	}
+
+	public void checkGrammarIsCompiled(@NotNull Context ctx) {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		Path compileStatusFilePath = Paths.get(grammarFolderPath.toString(), name + ".compiled");
+		ctx.result(compileStatusFilePath.toFile().exists() + "");
+	}
+
+	public void compileGrammar(@NotNull Context ctx) throws IOException {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		if (grammarFolderPath.toFile().exists()) {
+			File[] subFiles = grammarFolderPath.toFile().listFiles();
+			String grammarName = null;
+			File grammarFile = null;
+			for (File file2 : subFiles) {
+				if (file2.getName().endsWith(".g4")) {
+					grammarName = file2.getName().split("\\.")[0];
+					grammarFile = file2;
+				}
+			}
+			// 1. Run ANTLR Tool
+			org.antlr.v4.Tool antlr = new org.antlr.v4.Tool(
+					new String[] { grammarFolderPath.resolve(grammarFile.getName()).toString() });
+			antlr.processGrammarsOnCommandLine();
+
+			// 2. Compile Java Files
+			JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+			List<File> files = Files.walk(grammarFolderPath).filter(p -> p.toString().endsWith(".java"))
+					.map(Path::toFile).toList();
+			compiler.run(null, null, null, files.stream().map(File::getAbsolutePath).toArray(String[]::new));
+
+			Files.writeString(grammarFolderPath.resolve(grammarName + ".compiled"), "");
+
+			ctx.result(true + "");
+		} else {
+			ctx.result(false + "");
+		}
+
+	}
+
+	public void uploadGrammarOverwrite(@NotNull Context ctx) throws IOException {
+		String name = ctx.pathParam("name");
+		byte[] data = ctx.bodyAsBytes();
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		if (grammarFolderPath.toFile().exists()) {
+			File[] subFiles = grammarFolderPath.toFile().listFiles();
+			File grammarFile = null;
+			for (File file2 : subFiles) {
+				if (file2.getName().endsWith(".g4")) {
+					grammarFile = file2;
+				}
+			}
+			Files.write(grammarFolderPath.resolve(grammarFile.getName()), data);
+			ctx.result(true + "");
+		} else {
+			ctx.result(false + "");
+		}
+	}
+
+	public void getGrammar(@NotNull Context ctx) throws IOException {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		if (grammarFolderPath.toFile().exists()) {
+			File[] subFiles = grammarFolderPath.toFile().listFiles();
+			File grammarFile = null;
+			for (File file2 : subFiles) {
+				if (file2.getName().endsWith(".g4")) {
+					grammarFile = file2;
+				}
+			}
+			ctx.result(Files.readString(grammarFile.toPath()));
+		} else {
+			ctx.result();
+		}
+	}
+
+	public void getTreeAsLisp(@NotNull Context ctx) throws IOException {
+		String name = ctx.pathParam("name");
+		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "ast.txt");
+		ctx.result(Files.readString(grammarCacheFolderPath));
+	}
+
+	public void getTreeAsSvg(@NotNull Context ctx) throws IOException {
+		String name = ctx.pathParam("name");
+		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "ast.svg");
+		ctx.result(Files.readAllBytes(grammarCacheFolderPath));
+	}
+
+	public void getLastParseErrors(@NotNull Context ctx) throws IOException {
+		String name = ctx.pathParam("name");
+		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "errors.txt");
+		ctx.result(Files.readString(grammarCacheFolderPath));
+	}
+
+	public void getLastParsedContent(@NotNull Context ctx) throws IOException {
+		String name = ctx.pathParam("name");
+		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "input.txt");
+		ctx.result(Files.readString(grammarCacheFolderPath));
+	}
+
+}
