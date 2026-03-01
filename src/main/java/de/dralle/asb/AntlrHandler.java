@@ -63,7 +63,6 @@ public class AntlrHandler {
 		Path dir = storage.resolve(grammarName);
 		Files.createDirectories(dir);
 		Files.write(dir.resolve(grammarName + ".g4"), payload);
-		System.out.println("Grammar " + grammarName + " saved");
 
 		ctx.result(grammarName);
 	}
@@ -271,6 +270,21 @@ public class AntlrHandler {
 		String name = ctx.pathParam("name");
 		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "input.txt");
 		ctx.result(Files.readString(grammarCacheFolderPath));
+	}
+
+	public Object generateParserLexer(@NotNull Context ctx) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	public Object getLastGeneratorOutput(@NotNull Context ctx) {
+		// TODO Auto-generated method stub
+		return null;
+	}
+
+	public Object renameGrammar(@NotNull Context ctx) {
+		// TODO Auto-generated method stub
+		return null;
 	}
 
 }

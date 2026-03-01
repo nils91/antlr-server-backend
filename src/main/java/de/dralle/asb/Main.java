@@ -59,9 +59,12 @@ public class Main {
 			app.put("/api/grammars/upload", ctx -> handler.uploadGrammar(ctx));
 			app.put("/api/grammars/{name}/upload/", ctx -> handler.uploadGrammarOverwrite(ctx));
 			app.get("/api/grammars/{name}/compile/", ctx -> handler.compileGrammar(ctx));
+			app.get("/api/grammars/{name}/generate/", ctx -> handler.generateParserLexer(ctx));
+			app.get("/api/grammars/{name}/rename/{newName}", ctx -> handler.renameGrammar(ctx));
 			app.get("/api/grammars/list", ctx -> handler.listGrammars(ctx));
 			app.get("/api/grammars/{name}/exists/", ctx -> handler.checkGrammarExists(ctx));
 			app.get("/api/grammars/{name}/compiled/", ctx -> handler.checkGrammarIsCompiled(ctx));
+			app.get("/api/grammars/{name}/generated/", ctx -> handler.getLastGeneratorOutput(ctx));
 			app.get("/api/grammars/{name}/get/", ctx -> handler.getGrammar(ctx));
 			app.delete("/api/grammars/{name}/delete/", ctx -> handler.deleteGrammar(ctx));
 			app.put("/api/parse/{name}/{startRule}", ctx -> handler.parse(ctx));
