@@ -2,6 +2,7 @@ package de.dralle.asb;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.reflect.Method;
 import java.net.URL;
@@ -32,6 +33,7 @@ import org.antlr.v4.runtime.tree.Trees;
 import org.antlr.v4.tool.ANTLRToolListener;
 import org.jetbrains.annotations.NotNull;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import guru.nidi.graphviz.engine.Format;
@@ -53,16 +55,10 @@ public class AntlrHandler {
 	public void uploadGrammar(Context ctx) throws Exception {
 		byte[] payload = ctx.bodyAsBytes();
 		String text = new String(payload);
-		String[] lines = text.split("\n");
-		String grammarName = UUID.randomUUID().toString();
-		for (String string : lines) {
-			Pattern p = Pattern.compile("grammar\\s+(.+?)\\s*?(;|$)");
-			Matcher m = p.matcher(string);
-			if (m.find()) {
-				grammarName = m.group(1);
-			}
+		String grammarName = getGrammarNameFromGrammarFileContents(text);
+		if (grammarName == null) {
+			grammarName = UUID.randomUUID().toString();
 		}
-
 		Path dir = storage.resolve(grammarName);
 		Files.createDirectories(dir);
 		Files.write(dir.resolve(grammarName + ".g4"), payload);
@@ -77,22 +73,22 @@ public class AntlrHandler {
 		if (!dir.toFile().exists()) {
 			ctx.status(404);
 			return;
-		}	
+		}
 		Class<?> lexerClass = null;
 		Class<?> parserClass = null;
 		try (URLClassLoader loader = new URLClassLoader(new URL[] { dir.toUri().toURL() },
 				getClass().getClassLoader())) {
 			lexerClass = loader.loadClass(name + "Lexer");
 			parserClass = loader.loadClass(name + "Parser");
-		}catch(ClassNotFoundException e) {
+		} catch (ClassNotFoundException e) {
 			ctx.status(404);
 			return;
 		}
-		if(lexerClass==null||parserClass==null) {
+		if (lexerClass == null || parserClass == null) {
 			ctx.status(500);
 			return;
 		}
-		SyntaxErrorListener errorListener = new SyntaxErrorListener();
+		ParserErrorListener errorListener = new ParserErrorListener();
 
 		Lexer lexer = (Lexer) lexerClass.getConstructor(CharStream.class)
 				.newInstance(CharStreams.fromString(new String(payload)));
@@ -106,19 +102,20 @@ public class AntlrHandler {
 
 		String startRuleName = ctx.pathParam("startRule");
 		Method startRule = parserClass.getMethod(startRuleName);
-		if(startRule==null) {
+		if (startRule == null) {
 			ctx.status(400);
 			return;
 		}
 		ParseTree tree = (ParseTree) startRule.invoke(parser);
-		
+
 		Path cacheFolder = Paths.get(dir.toString(), "cache");
 		cacheFolder.toFile().mkdir();
 
-		Files.write(cacheFolder.resolve("errors.json"), new ObjectMapper().writeValueAsBytes(errorListener.getErrors()));
-		Files.writeString(cacheFolder.resolve("ast.txt"), tree.toStringTree());
+		Files.writeString(cacheFolder.resolve("errors.json"),
+				new ObjectMapper().writeValueAsString(errorListener.getErrors()));
+		Files.writeString(cacheFolder.resolve("ast.txt"), tree.toStringTree(parser));
 		byte[] svgTree = generateTreeImage(parser, tree);
-		Files.write(cacheFolder.resolve("ast.svg"),svgTree);
+		Files.write(cacheFolder.resolve("ast.svg"), svgTree);
 		Files.write(cacheFolder.resolve("input.txt"), payload);
 
 		ctx.result(svgTree);
@@ -170,7 +167,7 @@ public class AntlrHandler {
 	public void deleteGrammar(@NotNull Context ctx) {
 		String name = ctx.pathParam("name");
 		Path grammarFolderPath = Paths.get(storage.toString(), name);
-		if(!grammarFolderPath.toFile().exists()) {
+		if (!grammarFolderPath.toFile().exists()) {
 			ctx.status(404);
 			return;
 		}
@@ -202,55 +199,36 @@ public class AntlrHandler {
 	public void checkGrammarIsCompiled(@NotNull Context ctx) {
 		String name = ctx.pathParam("name");
 		Path grammarFolderPath = Paths.get(storage.toString(), name);
-		Path compileStatusFilePath = Paths.get(grammarFolderPath.toString(), name + ".compiled");
-		if(!grammarFolderPath.toFile().exists()) {
+		if (!grammarFolderPath.toFile().exists()) {
 			ctx.status(404);
 			return;
 		}
-		String compileResultFromFile=null;
-		try {
-			compileResultFromFile=Files.readString(compileStatusFilePath);
-		} catch (IOException e) {
-			
-		}
-		ctx.json("0".equals(compileResultFromFile));
+		Path lexerClassFilePath = Paths.get(grammarFolderPath.toString(), name + "Lexer.class");
+		Path parserClassFilePath = Paths.get(grammarFolderPath.toString(), name + "Parser.class");
+		ctx.json(lexerClassFilePath.toFile().exists() && parserClassFilePath.toFile().exists());
 	}
 
 	public void compileGrammar(@NotNull Context ctx) throws IOException {
 		String name = ctx.pathParam("name");
 		Path grammarFolderPath = Paths.get(storage.toString(), name);
-		Path grammarFileName=grammarFolderPath.resolve(name+".g4");
-		org.antlr.v4.Tool antlr = new org.antlr.v4.Tool(
-				new String[] { grammarFileName.toString() });
-		antlr.processGrammarsOnCommandLine();
-		if (grammarFolderPath.toFile().exists()) {
-			File[] subFiles = grammarFolderPath.toFile().listFiles();
-			String grammarName = null;
-			File grammarFile = null;
-			for (File file2 : subFiles) {
-				if (file2.getName().endsWith(".g4")) {
-					grammarName = file2.getName().split("\\.")[0];
-					grammarFile = file2;
-				}
-			}
-			// 1. Run ANTLR Tool
-			org.antlr.v4.Tool antlr = new org.antlr.v4.Tool(
-					new String[] { grammarFolderPath.resolve(grammarFile.getName()).toString() });
-			antlr.processGrammarsOnCommandLine();
-
-			// 2. Compile Java Files
-			JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-			List<File> files = Files.walk(grammarFolderPath).filter(p -> p.toString().endsWith(".java"))
-					.map(Path::toFile).toList();
-			int compileResult =compiler.run(null, null, null, files.stream().map(File::getAbsolutePath).toArray(String[]::new));
-
-			Files.writeString(grammarFolderPath.resolve(grammarName + ".compiled"), compileResult+"");
-
-			ctx.result(true + "");
-		} else {
-			ctx.result(false + "");
+		Path lexerClassFilePath = Paths.get(grammarFolderPath.toString(), name + "Lexer.java");
+		Path parserClassFilePath = Paths.get(grammarFolderPath.toString(), name + "Parser.java");
+		if (!lexerClassFilePath.toFile().exists() || !parserClassFilePath.toFile().exists()) {
+			ctx.status(404);
+			return;
 		}
-
+		Path outFileName = Paths.get(grammarFolderPath.toString(), name + ".out");
+		Path errFileName = Paths.get(grammarFolderPath.toString(), name + ".err");
+		FileOutputStream outFileStream = new FileOutputStream(outFileName.toFile());
+		FileOutputStream errFileStream = new FileOutputStream(errFileName.toFile());
+		JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
+		List<File> files = Files.walk(grammarFolderPath).filter(p -> p.toString().endsWith(".java")).map(Path::toFile)
+				.toList();
+		int compileResult = compiler.run(null, outFileStream, errFileStream,
+				files.stream().map(File::getAbsolutePath).toArray(String[]::new));
+		outFileStream.close();
+		errFileStream.close();
+		ctx.json(compileResult);
 	}
 
 	public void uploadGrammarOverwrite(@NotNull Context ctx) throws IOException {
@@ -266,9 +244,9 @@ public class AntlrHandler {
 				}
 			}
 			Files.write(grammarFolderPath.resolve(grammarFile.getName()), data);
-			ctx.result(true + "");
+			ctx.json(true);
 		} else {
-			ctx.result(false + "");
+			ctx.status(404);
 		}
 	}
 
@@ -285,65 +263,137 @@ public class AntlrHandler {
 			}
 			ctx.result(Files.readString(grammarFile.toPath()));
 		} else {
-			ctx.result();
+			ctx.status(404);
 		}
 	}
 
 	public void getTreeAsLisp(@NotNull Context ctx) throws IOException {
 		String name = ctx.pathParam("name");
 		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "ast.txt");
+		if (!grammarCacheFolderPath.toFile().exists()) {
+			ctx.status(404);
+			return;
+		}
 		ctx.result(Files.readString(grammarCacheFolderPath));
 	}
 
 	public void getTreeAsSvg(@NotNull Context ctx) throws IOException {
 		String name = ctx.pathParam("name");
 		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "ast.svg");
+		if (!grammarCacheFolderPath.toFile().exists()) {
+			ctx.status(404);
+			return;
+		}
 		ctx.result(Files.readAllBytes(grammarCacheFolderPath));
 	}
 
 	public void getLastParseErrors(@NotNull Context ctx) throws IOException {
 		String name = ctx.pathParam("name");
 		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "errors.txt");
+		if (!grammarCacheFolderPath.toFile().exists()) {
+			ctx.status(404);
+			return;
+		}
 		ctx.result(Files.readString(grammarCacheFolderPath));
 	}
 
 	public void getLastParsedContent(@NotNull Context ctx) throws IOException {
 		String name = ctx.pathParam("name");
 		Path grammarCacheFolderPath = Paths.get(storage.toString(), name, "cache", "input.txt");
-		ctx.result(Files.readString(grammarCacheFolderPath));
-	}
-
-	public void generateParserLexer(@NotNull Context ctx) {
-		String name = ctx.pathParam("name");
-		Path grammarFolderPath = Paths.get(storage.toString(), name);
-		Path grammarFileName=grammarFolderPath.resolve(name+".g4");
-		if(!grammarFileName.toFile().exists()) {
+		if (!grammarCacheFolderPath.toFile().exists()) {
 			ctx.status(404);
 			return;
 		}
-		org.antlr.v4.Tool antlr = new org.antlr.v4.Tool(
-				new String[] { grammarFileName.toString() });
-		ANTLRGenerateListener gmc = new ANTLRGenerateListener();antlr.removeListeners();		
+		ctx.result(Files.readString(grammarCacheFolderPath));
+	}
+
+	public void generateParserLexer(@NotNull Context ctx) throws JsonProcessingException, IOException {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		Path grammarFileName = grammarFolderPath.resolve(name + ".g4");
+		if (!grammarFileName.toFile().exists()) {
+			ctx.status(404);
+			return;
+		}
+		org.antlr.v4.Tool antlr = new org.antlr.v4.Tool(new String[] { grammarFileName.toString() });
+		ANTLRGenerateListener gmc = new ANTLRGenerateListener();
+		antlr.removeListeners();
 		antlr.addListener(gmc);
 		antlr.processGrammarsOnCommandLine();
 		List<GeneratorMessage> messages = gmc.getMessages();
-		Path expectedParserFileName=grammarFolderPath.resolve(name+"Parser.java");
-		Path expectedLexerFileName=grammarFolderPath.resolve(name+"Lexer.java");
+		Path errorLogFile = grammarFolderPath.resolve(name + "generated.errors.json");
+		Files.writeString(errorLogFile, new ObjectMapper().writeValueAsString(messages));
+		ctx.json(isParserGenerated(grammarFolderPath, name));
 	}
 
-	public Object getLastGeneratorOutput(@NotNull Context ctx) {
-		// TODO Auto-generated method stub
+	private boolean isParserGenerated(Path grammarFolderPath, String name) {
+		Path expectedParserFileName = grammarFolderPath.resolve(name + "Parser.java");
+		Path expectedLexerFileName = grammarFolderPath.resolve(name + "Lexer.java");
+		return expectedLexerFileName.toFile().exists() && expectedParserFileName.toFile().exists();
+	}
+
+	public void getLastGeneratorOutput(@NotNull Context ctx) throws IOException {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		Path errorLogFile = grammarFolderPath.resolve(name + "generated.errors.json");
+		if (!errorLogFile.toFile().exists()) {
+			ctx.status(404);
+			return;
+		}
+		ctx.result(Files.readAllBytes(errorLogFile));
+	}
+
+	public void renameGrammar(@NotNull Context ctx) {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		if (!grammarFolderPath.toFile().exists()) {
+			ctx.status(404);
+			return;
+		}
+		String newName = ctx.pathParam("newName");
+		Path newGrammarFolderPath = Paths.get(storage.toString(), newName);
+		if (newGrammarFolderPath.toFile().exists()) {
+			ctx.status(400);
+			return;
+		}
+		ctx.json(grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile()));
+	}
+
+	public void isGrammarGenerated(@NotNull Context ctx) {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		if (!grammarFolderPath.toFile().exists()) {
+			ctx.status(404);
+			return;
+		}
+		ctx.json(isParserGenerated(grammarFolderPath, name));
+	}
+
+	public void renameGrammarFromFile(@NotNull Context ctx) {
+		String name = ctx.pathParam("name");
+		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		if (!grammarFolderPath.toFile().exists()) {
+			ctx.status(404);
+			return;
+		}
+		String newName = getGrammarNameFromGrammarFileContents(ctx.body());
+		Path newGrammarFolderPath = Paths.get(storage.toString(), newName);
+		if (newGrammarFolderPath.toFile().exists()) {
+			ctx.status(400);
+			return;
+		}
+		ctx.json(grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile()));
+	}
+
+	private String getGrammarNameFromGrammarFileContents(String body) {
+		String[] lines = body.split("\n");
+		for (String string : lines) {
+			Pattern p = Pattern.compile("grammar\\s+(.+?)\\s*?(;|$)");
+			Matcher m = p.matcher(string);
+			if (m.find()) {
+				return m.group(1);
+			}
+		}
 		return null;
 	}
-
-	public Object renameGrammar(@NotNull Context ctx) {
-		// TODO Auto-generated method stub
-		return null;
-	}
-
-	public Object isGrammarGenerated(@NotNull Context ctx) {
-		// TODO Auto-generated method stub
-		return null;
-	}
-
 }

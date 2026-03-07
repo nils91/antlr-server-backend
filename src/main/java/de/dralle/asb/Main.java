@@ -60,7 +60,8 @@ public class Main {
 			app.put("/api/grammars/{name}/upload/", ctx -> handler.uploadGrammarOverwrite(ctx));
 			app.post("/api/grammars/{name}/compile/", ctx -> handler.compileGrammar(ctx));
 			app.post("/api/grammars/{name}/generate/", ctx -> handler.generateParserLexer(ctx));
-			app.post("/api/grammars/{name}/rename/{newName}", ctx -> handler.renameGrammar(ctx));
+			app.put("/api/grammars/{name}/rename/{newName}", ctx -> handler.renameGrammar(ctx));
+			app.put("/api/grammars/{name}/rename/", ctx -> handler.renameGrammarFromFile(ctx));
 			app.get("/api/grammars/list", ctx -> handler.listGrammars(ctx));
 			app.get("/api/grammars/{name}/exists/", ctx -> handler.checkGrammarExists(ctx));
 			app.get("/api/grammars/{name}/compiled/", ctx -> handler.checkGrammarIsCompiled(ctx));
