@@ -346,17 +346,19 @@ public class AntlrHandler {
 	public void renameGrammar(@NotNull Context ctx) {
 		String name = ctx.pathParam("name");
 		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		Path oldGrammarFileName=grammarFolderPath.resolve(name+".g4");
 		if (!grammarFolderPath.toFile().exists()) {
 			ctx.status(404);
 			return;
 		}
 		String newName = ctx.pathParam("newName");
 		Path newGrammarFolderPath = Paths.get(storage.toString(), newName);
+		Path newGrammarFileName=newGrammarFolderPath.resolve(newName+".g4");
 		if (newGrammarFolderPath.toFile().exists()) {
 			ctx.status(400);
 			return;
 		}
-		ctx.json(grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile()));
+		ctx.json(grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile())&&oldGrammarFileName.toFile().renameTo(newGrammarFileName.toFile()));
 	}
 
 	public void isGrammarGenerated(@NotNull Context ctx) {
@@ -372,17 +374,19 @@ public class AntlrHandler {
 	public void renameGrammarFromFile(@NotNull Context ctx) {
 		String name = ctx.pathParam("name");
 		Path grammarFolderPath = Paths.get(storage.toString(), name);
+		Path oldGrammarFileName=grammarFolderPath.resolve(name+".g4");
 		if (!grammarFolderPath.toFile().exists()) {
 			ctx.status(404);
 			return;
 		}
 		String newName = getGrammarNameFromGrammarFileContents(ctx.body());
 		Path newGrammarFolderPath = Paths.get(storage.toString(), newName);
+		Path newGrammarFileName=newGrammarFolderPath.resolve(newName+".g4");
 		if (newGrammarFolderPath.toFile().exists()) {
 			ctx.status(400);
 			return;
 		}
-		ctx.json(grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile()));
+		ctx.json(grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile())&&oldGrammarFileName.toFile().renameTo(newGrammarFileName.toFile()));
 	}
 
 	private String getGrammarNameFromGrammarFileContents(String body) {
