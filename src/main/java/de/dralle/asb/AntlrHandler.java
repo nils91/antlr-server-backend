@@ -321,7 +321,7 @@ public class AntlrHandler {
 		antlr.addListener(gmc);
 		antlr.processGrammarsOnCommandLine();
 		List<GeneratorMessage> messages = gmc.getMessages();
-		Path errorLogFile = grammarFolderPath.resolve(name + "generated.errors.json");
+		Path errorLogFile = grammarFolderPath.resolve(name + ".generated.errors.json");
 		Files.writeString(errorLogFile, new ObjectMapper().writeValueAsString(messages));
 		ctx.json(isParserGenerated(grammarFolderPath, name));
 	}
@@ -335,7 +335,7 @@ public class AntlrHandler {
 	public void getLastGeneratorOutput(@NotNull Context ctx) throws IOException {
 		String name = ctx.pathParam("name");
 		Path grammarFolderPath = Paths.get(storage.toString(), name);
-		Path errorLogFile = grammarFolderPath.resolve(name + "generated.errors.json");
+		Path errorLogFile = grammarFolderPath.resolve(name + ".generated.errors.json");
 		if (!errorLogFile.toFile().exists()) {
 			ctx.status(404);
 			return;
@@ -353,12 +353,12 @@ public class AntlrHandler {
 		}
 		String newName = ctx.pathParam("newName");
 		Path newGrammarFolderPath = Paths.get(storage.toString(), newName);
-		Path newGrammarFileName=newGrammarFolderPath.resolve(newName+".g4");
+		Path newGrammarFileName=grammarFolderPath.resolve(newName+".g4");
 		if (newGrammarFolderPath.toFile().exists()) {
 			ctx.status(400);
 			return;
 		}
-		ctx.json(grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile())&&oldGrammarFileName.toFile().renameTo(newGrammarFileName.toFile()));
+		ctx.json(oldGrammarFileName.toFile().renameTo(newGrammarFileName.toFile())&&grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile()));
 	}
 
 	public void isGrammarGenerated(@NotNull Context ctx) {
@@ -381,13 +381,13 @@ public class AntlrHandler {
 		}
 		String newName = getGrammarNameFromGrammarFileContents(ctx.body());
 		Path newGrammarFolderPath = Paths.get(storage.toString(), newName);
-		Path newGrammarFileName=newGrammarFolderPath.resolve(newName+".g4");
+		Path newGrammarFileName=grammarFolderPath.resolve(newName+".g4");
 		if (newGrammarFolderPath.toFile().exists()) {
 			ctx.status(400);
 			return;
 		}
-		ctx.json(grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile())&&oldGrammarFileName.toFile().renameTo(newGrammarFileName.toFile()));
-	}
+		ctx.json(oldGrammarFileName.toFile().renameTo(newGrammarFileName.toFile())&&grammarFolderPath.toFile().renameTo(newGrammarFolderPath.toFile()));
+}
 
 	private String getGrammarNameFromGrammarFileContents(String body) {
 		String[] lines = body.split("\n");
